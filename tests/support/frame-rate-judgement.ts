@@ -5,7 +5,7 @@
 //
 // The bound is half the CPU count. On one 12-CPU desktop the test held
 // 60.00 frames a second with no long frame at load averages of 2.1 to
-// 2.7, its own browser and server included, and failed (55.7 and 58.6
+// 3.7, its own browser and server included, and failed (55.7 and 58.6
 // frames a second, up to 25 long frames of whole missed refreshes) at 9
 // to 16 from other sessions; half of 12, 6, sits between the two.
 
