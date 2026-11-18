@@ -362,6 +362,11 @@ const near = (a: number, b: number) => Math.abs(a - b) <= 1
 // and a slip can put it up to `widerFollowSeconds` later.
 const fadeSeconds = widerFollowSeconds + 0.04
 
+// A moved fade is kept only where it leaves less than half of what the
+// unmoved lag leaves: the fade fitted at the wrong lag, not the noise both
+// fits share, as with `secondSpliceGain`.
+const fadeGain = 0.5
+
 // The power of 16-bit quantisation's error, a 2^-15 step's, per sample.
 const quantisationPower = 2 ** -30 / 12
 
@@ -373,8 +378,12 @@ const quantisationPower = 2 ** -30 / 12
 // Over a whole segment, the resampler's ringing either side of the slip's
 // silence outweighs a fade that quiet, but the fade is still well clear of
 // 16-bit quantisation, so each lag within the wider search is spliced to
-// from the last segment, and the one that leaves the least, by more than
-// half, is where the fade went.
+// from the last segment, and the one that leaves the least is where the
+// fade went, if it leaves less than `fadeGain` of what the unmoved lag
+// leaves. Each lag is charged for the capture's own power over the samples
+// it calls the slip's silence, which a real slip leaves at zero: uncharged,
+// a lag 110 ms on, spliced at the span's end, sheds that much of a steady
+// noise floor and passes for a slip.
 const fadeAfter = (
   capture: Float32Array,
   expected: Float64Array,
@@ -389,6 +398,7 @@ const fadeAfter = (
   )
   const reach = Math.round(widerFollowSeconds * captureRate)
   const earlier = differenceSums(capture, expected, last.lag, from, to)
+  const silence = differenceSums(capture, new Float64Array(0), 0, from, to)
   const unmoved = sumOver(earlier, from, to)
   let least = Number.POSITIVE_INFINITY
   let moved: Stretch | null = null
@@ -398,7 +408,7 @@ const fadeAfter = (
     }
     const added = Math.max(0, lag - last.lag)
     const later = differenceSums(capture, expected, lag, from, to)
-    const splice = oneSplice(earlier, later, from, to, added)
+    const splice = oneSplice(earlier, later, from, to, added, silence)
     if (splice.cost < least) {
       least = splice.cost
       moved = { lag, from: splice.end + added, to }
@@ -407,7 +417,7 @@ const fadeAfter = (
   // What the moved lag saves must also be more than 16-bit quantisation
   // leaves over the span: below that, as on a capture made here with no
   // noise at all, the lags differ only in their rounding.
-  return least < secondSpliceGain * unmoved &&
+  return least < fadeGain * unmoved &&
     unmoved - least > (to - from) * quantisationPower
     ? moved
     : null
@@ -470,7 +480,7 @@ const secondSpliceGain = 0.5
 
 // Running sums of the squared difference from the source at `lag` over
 // [from, to): the difference over [a, b) is `sumOver(sums, from, b) -
-// sumOver(sums, from, a)`.
+// sumOver(sums, from, a)`. With no source, the capture's own power.
 const differenceSums = (
   capture: Float32Array,
   expected: Float64Array,
@@ -492,20 +502,27 @@ const sumOver = (sums: Float64Array, from: number, index: number): number =>
 // The one splice over [from, to) from the source at the lag `earlier` sums
 // to the source at the lag `later` sums, `added` samples later, that leaves
 // the least: where the capture stops following the earlier lag, and what
-// is left either side of it.
+// is left either side of it, with the capture's power over the added
+// samples when `silence` sums it.
 const oneSplice = (
   earlier: Float64Array,
   later: Float64Array,
   from: number,
   to: number,
   added: number,
+  silence?: Float64Array,
 ): Readonly<{ end: number; cost: number }> => {
   const total = sumOver(later, from, to)
   let cost = Number.POSITIVE_INFINITY
   let splice = from
   for (let end = from; end + added <= to; end++) {
     const left =
-      sumOver(earlier, from, end) + total - sumOver(later, from, end + added)
+      sumOver(earlier, from, end) +
+      total -
+      sumOver(later, from, end + added) +
+      (silence === undefined
+        ? 0
+        : sumOver(silence, from, end + added) - sumOver(silence, from, end))
     if (left < cost) {
       cost = left
       splice = end

@@ -5,6 +5,7 @@ import {
   lowPass,
   sourceAsCaptured,
 } from './audio-compare.ts'
+import { random, seedOf } from './random.ts'
 import { synthesiseVoice } from './synthetic-voice.ts'
 
 // The comparison the fake-microphone tests measure with
@@ -179,15 +180,16 @@ describe('compareWithSource', () => {
 
   // Six buffers is the largest slip seen in 2,800 takes; a take is kept
   // with up to 80 ms of silence put in past the voice's own 27 ms
-  // (tests/support/stalls.ts), so the comparison must follow 107 ms too,
-  // in voice and in the voice's own silence, which the slip joins.
+  // (tests/support/stalls.ts), so the comparison must follow 107 ms in
+  // voice, where the slip's silence stands alone, and 80 ms in the voice's
+  // own silence, which the slip joins.
   test.each([
     [0.06, 0.8],
     [0.06, 1.14],
     [0.107, 0.8],
-    [0.107, 1.14],
+    [0.08, 1.14],
   ])(
-    'follows a slip of %s s at %s s into the source, as large as a kept take can hold',
+    'follows a slip of %s s at %s s into the source, up to the largest a kept take can hold there',
     (seconds, atSeconds) => {
       const delay = Math.round(0.0327 * rate)
       const count = Math.round(seconds * rate)
@@ -262,6 +264,48 @@ describe('compareWithSource', () => {
     // Where the source resumes, past the silence: 1.91 s into the source.
     expect(result?.slips[0]?.atSeconds).toBeCloseTo(1.91 + 0.05206, 3)
     expect(result?.snrDb).toBeGreaterThan(100)
+  })
+
+  test("finds a buffer lost in the voice's last fade through the device resampler", () => {
+    // The fade test above with its buffer lost instead of added: the fade
+    // is searched for at earlier lags too.
+    const deviceRate = 44100
+    const atDevice = Float32Array.from(
+      sourceAsCaptured(source, rate, deviceRate, 0.0227, 3 * deviceRate),
+    )
+    const at = Math.round((1.91 + 0.0227) * deviceRate)
+    const capture = Float32Array.from(
+      sourceAsCaptured(
+        slipped(atDevice, at, -441),
+        deviceRate,
+        rate,
+        0.01936,
+        captureLength,
+      ),
+    )
+    const result = compareWithSource(capture, rate, source, rate)
+    expect(result?.delaySeconds).toBeCloseTo(0.04206, 6)
+    expect(result?.slips).toHaveLength(1)
+    expect(result?.slips[0]?.bySeconds).toBeCloseTo(-0.01, 4)
+    // Where the capture goes on at the earlier lag: 1.91 s into the source.
+    expect(result?.slips[0]?.atSeconds).toBeCloseTo(1.91 + 0.04206, 2)
+    expect(result?.snrDb).toBeGreaterThan(100)
+  })
+
+  test('finds no slip in a capture with a steady noise floor 70 dB below the voice', () => {
+    // The fade search drops what a candidate calls the slip's silence from
+    // what it leaves, so a noise floor spread over the fade must not make
+    // a lag far off, spliced at the span's end, look like a slip.
+    const next = random(seedOf('noise floor'))
+    const peak = source.reduce((most, x) => Math.max(most, Math.abs(x)), 0)
+    // Uniform noise of this half-width has an RMS 70 dB below the peak.
+    const width = peak * 10 ** (-70 / 20) * Math.sqrt(3)
+    const capture = delayed(source, 960, captureLength).map(
+      x => x + (next() * 2 - 1) * width,
+    )
+    const result = compareWithSource(capture, rate, source, rate)
+    expect(result?.slips).toStrictEqual([])
+    expect(result?.delaySeconds).toBeCloseTo(960 / rate, 6)
   })
 
   test('reports 10 ms lost as a slip back', () => {
