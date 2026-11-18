@@ -100,7 +100,7 @@ Every slip seen added 10 ms, but for a few that added 20 to 60 ms under load: ov
 
 Three takes, on three Playwright workers in the same second, on a shared machine with 12 GB in swap when it was read 40 minutes later, went silent for most of a second: each capture held several runs of exact zeros inside the voice, the longest 268, 308 and 328 ms, against the 60 ms of the largest slip seen, and each lost about 0.6 s of what the file played meanwhile, measuring 4, 1 and -1 dB of signal over the rest.
 That is the machine stopping the audio path, not the device's buffers, and no comparison can measure it.
-So each take the tests compare is checked first by `tests/support/stalls.ts`: a take whose longest run of exact zeros inside the voice is more than 80 ms longer than the source's own longest (the synthetic voices hold 21 to 27 ms between their voiced spans) stalled, and is recorded again, up to twice.
+So each take the tests hold to the source, every take on the fake microphone but the one with the browser's processing left on, is checked first by `tests/support/stalls.ts`: a take whose longest run of exact zeros inside the voice is more than 80 ms longer than the source's own longest (the synthetic voices hold 21 to 27 ms between their voiced spans) stalled, and is recorded again, up to twice.
 80 ms is two buffers past the largest slip seen and well below the shortest stall seen.
 Each stall is printed in the test's output and kept in its annotations, and the twenty runs' attachment lists them, so a rising stall rate shows on a passing run; a take that stalls three times in a row fails, naming each stall.
 
