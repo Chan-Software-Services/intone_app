@@ -11,10 +11,10 @@ import { launch, openLine, report, withPage } from './take-session.ts'
 // The live curve's frame rate: a 20 s take in the built app, drawn over
 // the line's curve, with the CPU slowed six times, as a phone's might be,
 // must keep the page at 60 frames a second, judged on a desktop run that
-// other work does not load (below). It is the check every Foldkit upgrade runs (docs/upgrading.md),
-// and runs in a Playwright project of its own, after every other
-// end-to-end test has finished, so that no other test's browser shares the
-// machine while it measures.
+// other work does not load (below). It is the check every Foldkit upgrade
+// runs (docs/upgrading.md), and runs in a Playwright project of its own,
+// after every other end-to-end test has finished, so that no other test's
+// browser shares the machine while it measures.
 
 const fixtures = join(import.meta.dirname, '..', '..', 'fixtures', 'synthetic')
 
@@ -86,16 +86,16 @@ test('holds 60 frames a second through a 20 s take at 6x CPU throttle', async ({
       // 16.7 ms and of 33.3 ms (docs/latency.md).
       const longFrames = gaps.filter(gap => gap >= 25)
       const framesPerSecond = gaps.length / seconds
-      // The bounds are judged on a desktop run the machine can bear
-      // (tests/support/frame-rate-judgement.ts); otherwise the numbers are
-      // recorded without being judged, and the report says why.
-      // The machine's own CPUs, as the load average counts the whole
-      // machine's runnable tasks, not this process's share of its CPUs.
-      const cpuCount = cpus().length
+      const machine = {
+        loadAverages: [loadAtStart, loadAtEnd] as const,
+        // The machine's own CPUs, as the load average counts the whole
+        // machine's runnable tasks, not this process's share of its CPUs.
+        cpus: cpus().length,
+      }
+      // Whether the bounds are judged (tests/support/frame-rate-judgement.ts).
       const judgement = frameRateJudgement({
         ci: Boolean(process.env['CI']),
-        loadAverages: [loadAtStart, loadAtEnd],
-        cpus: cpuCount,
+        ...machine,
       })
       const measured = {
         seconds,
@@ -104,19 +104,31 @@ test('holds 60 frames a second through a 20 s take at 6x CPU throttle', async ({
         longFrames,
         largestGapMs: Math.max(...gaps),
         drawnFrames,
-        loadAverages: [loadAtStart, loadAtEnd],
-        cpus: cpuCount,
-        judged: judgement.judged,
-        ...(judgement.judged ? {} : { notJudgedBecause: judgement.reason }),
+        ...machine,
+        ...(judgement.judged
+          ? judgement
+          : { judged: false, notJudgedBecause: judgement.reason }),
       }
       await report(testInfo, 'frame-rate.json', measured)
       // In the run's log as well, where CI keeps them.
       process.stdout.write(`frame-rate.json ${JSON.stringify(measured)}\n`)
-      process.stdout.write(
-        judgement.judged
-          ? 'frame rate judged against its bounds\n'
-          : `frame rate recorded without judging: ${judgement.reason}\n`,
-      )
+      if (judgement.judged) {
+        process.stdout.write(
+          judgement.loadUnread === undefined
+            ? 'frame rate judged against its bounds\n'
+            : `frame rate judged against its bounds, its load unread: ${judgement.loadUnread}\n`,
+        )
+      } else {
+        process.stdout.write(
+          `frame rate recorded without judging: ${judgement.reason}\n`,
+        )
+        // On the test itself, so a reporter's pass does not read as a
+        // pass of the bounds.
+        testInfo.annotations.push({
+          type: 'frame rate',
+          description: `recorded without judging: ${judgement.reason}`,
+        })
+      }
 
       expect(seconds).toBeGreaterThan(18)
       if (judgement.judged) {

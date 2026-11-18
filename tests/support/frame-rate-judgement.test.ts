@@ -29,10 +29,7 @@ describe('frameRateJudgement', () => {
   test('records without judging on CI, whatever the load', () => {
     expect(
       frameRateJudgement({ ci: true, loadAverages: [0.5, 0.5], cpus: 4 }),
-    ).toStrictEqual({
-      judged: false,
-      reason: 'CI only records the frame rate',
-    })
+    ).toStrictEqual({ judged: false, reason: 'CI only records the frame rate' })
   })
 
   test('records without judging on a desktop loaded as the one that failed, at 9 on 12 CPUs', () => {
@@ -40,7 +37,8 @@ describe('frameRateJudgement', () => {
       frameRateJudgement({ ci: false, loadAverages: [9, 2], cpus: 12 }),
     ).toStrictEqual({
       judged: false,
-      reason: 'the load average reached 9.00, above 6.00, half of the 12 CPUs',
+      reason:
+        'the load average reached 9.00, above the bound of 6.00 for 12 CPUs',
     })
   })
 
@@ -49,7 +47,32 @@ describe('frameRateJudgement', () => {
       frameRateJudgement({ ci: false, loadAverages: [2, 16.04], cpus: 12 }),
     ).toStrictEqual({
       judged: false,
-      reason: 'the load average reached 16.04, above 6.00, half of the 12 CPUs',
+      reason:
+        'the load average reached 16.04, above the bound of 6.00 for 12 CPUs',
     })
+  })
+
+  test('judges a desktop run whose load reads as zeros, as Windows gives, and says the load was not read', () => {
+    expect(
+      frameRateJudgement({ ci: false, loadAverages: [0, 0], cpus: 12 }),
+    ).toStrictEqual({
+      judged: true,
+      loadUnread: 'the load average read 0, as on a system that keeps none',
+    })
+  })
+
+  test('judges a desktop run that counts no CPUs, and says the load was not read', () => {
+    expect(
+      frameRateJudgement({ ci: false, loadAverages: [9, 9], cpus: 0 }),
+    ).toStrictEqual({
+      judged: true,
+      loadUnread: 'the machine counted no CPUs, so the load has no bound',
+    })
+  })
+
+  test('records without judging on CI even when the load is not read', () => {
+    expect(
+      frameRateJudgement({ ci: true, loadAverages: [0, 0], cpus: 0 }),
+    ).toStrictEqual({ judged: false, reason: 'CI only records the frame rate' })
   })
 })
