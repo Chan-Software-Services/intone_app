@@ -317,8 +317,6 @@ const followSource = (
     }
   }
 
-  // A sample either way is the resampler's fraction, not a slip.
-  const near = (a: number, b: number) => Math.abs(a - b) <= 1
   const stretches: Array<Stretch> = []
   placed.forEach(({ from, lag: segmentLag }, index) => {
     const last = stretches.at(-1)
@@ -339,11 +337,78 @@ const followSource = (
       stretches.push({ lag: segmentLag, from, to: from + segment })
     }
   })
+  const last = stretches.at(-1)
+  const fade =
+    last === undefined
+      ? null
+      : fadeAfter(capture, expected, captureRate, segment, last)
+  if (fade !== null) {
+    stretches.push(fade)
+  }
   return {
     stretches: spliced(capture, expected, stretches, segment),
     bestLags,
     placed: placed.length,
   }
+}
+
+// A sample either way is the resampler's fraction, not a slip.
+const near = (a: number, b: number) => Math.abs(a - b) <= 1
+
+// The voice's last fade, past the last segment loud enough to place: in
+// the synthetic voices about 40 ms of it, 55 dB and more below the peak,
+// and a slip can put it up to `widerFollowSeconds` later.
+const fadeSeconds = 0.1
+
+// The power of 16-bit quantisation's error, a 2^-15 step's, per sample.
+const quantisationPower = 2 ** -30 / 12
+
+// The fade past the last stretch, as a stretch of its own when a slip has
+// moved it. It is too quiet for a segment to place, so with no stretch past
+// it, a slip in the last segment placed would leave that segment in the
+// fit at the old lag with the slip inside it: three takes in 800 on a
+// loaded machine slipped 10 ms past the voice's end and measured 61 dB.
+// Over a whole segment, the resampler's ringing either side of the slip's
+// silence outweighs a fade that quiet, but the fade is still well clear of
+// 16-bit quantisation, so each lag within the wider search is spliced to
+// from the last segment, and the one that leaves the least, by more than
+// half, is where the fade went.
+const fadeAfter = (
+  capture: Float32Array,
+  expected: Float64Array,
+  captureRate: number,
+  segment: number,
+  last: Stretch,
+): Stretch | null => {
+  const from = Math.max(last.from, last.to - segment)
+  const to = Math.min(
+    capture.length,
+    last.to + Math.round(fadeSeconds * captureRate),
+  )
+  const reach = Math.round(widerFollowSeconds * captureRate)
+  const earlier = differenceSums(capture, expected, last.lag, from, to)
+  const unmoved = sumOver(earlier, from, to)
+  let least = Number.POSITIVE_INFINITY
+  let moved: Stretch | null = null
+  for (let lag = last.lag - reach; lag <= last.lag + reach; lag++) {
+    if (near(lag, last.lag)) {
+      continue
+    }
+    const added = Math.max(0, lag - last.lag)
+    const later = differenceSums(capture, expected, lag, from, to)
+    const splice = oneSplice(earlier, later, from, to, added)
+    if (splice.cost < least) {
+      least = splice.cost
+      moved = { lag, from: splice.end + added, to }
+    }
+  }
+  // What the moved lag saves must also be more than 16-bit quantisation
+  // leaves over the span: below that, as on a capture made here with no
+  // noise at all, the lags differ only in their rounding.
+  return least < secondSpliceGain * unmoved &&
+    unmoved - least > (to - from) * quantisationPower
+    ? moved
+    : null
 }
 
 // Each pair of stretches meets at its splice: the one sample at which the
@@ -401,6 +466,52 @@ type Join = Readonly<{
 // the noise both fits share.
 const secondSpliceGain = 0.5
 
+// Running sums of the squared difference from the source at `lag` over
+// [from, to): the difference over [a, b) is `sumOver(sums, from, b) -
+// sumOver(sums, from, a)`.
+const differenceSums = (
+  capture: Float32Array,
+  expected: Float64Array,
+  lag: number,
+  from: number,
+  to: number,
+): Float64Array => {
+  const sums = new Float64Array(to - from + 1)
+  for (let i = from; i < to; i++) {
+    const difference = (capture[i] ?? 0) - (expected[i - lag] ?? 0)
+    sums[i - from + 1] = (sums[i - from] ?? 0) + difference * difference
+  }
+  return sums
+}
+
+const sumOver = (sums: Float64Array, from: number, index: number): number =>
+  sums[index - from] ?? 0
+
+// The one splice over [from, to) from the source at the lag `earlier` sums
+// to the source at the lag `later` sums, `added` samples later, that leaves
+// the least: where the capture stops following the earlier lag, and what
+// is left either side of it.
+const oneSplice = (
+  earlier: Float64Array,
+  later: Float64Array,
+  from: number,
+  to: number,
+  added: number,
+): Readonly<{ end: number; cost: number }> => {
+  const total = sumOver(later, from, to)
+  let cost = Number.POSITIVE_INFINITY
+  let splice = from
+  for (let end = from; end + added <= to; end++) {
+    const left =
+      sumOver(earlier, from, end) + total - sumOver(later, from, end + added)
+    if (left < cost) {
+      cost = left
+      splice = end
+    }
+  }
+  return { end: splice, cost }
+}
+
 // How the capture goes from the source at `lagBefore` to the source at
 // `lagAfter` over [from, to): at one splice, or at two with the source at
 // a lag between them in the stretch they bound, each by the least squared
@@ -414,34 +525,18 @@ const joins = (
   to: number,
 ): ReadonlyArray<Join> => {
   const added = Math.max(0, lagAfter - lagBefore)
-  // Running sums of the squared difference at a lag, from `from`: the
-  // difference over [a, b) is `sums[b - from] - sums[a - from]`.
-  const differences = (lag: number) => {
-    const sums = new Float64Array(to - from + 1)
-    for (let i = from; i < to; i++) {
-      const difference = (capture[i] ?? 0) - (expected[i - lag] ?? 0)
-      sums[i - from + 1] = (sums[i - from] ?? 0) + difference * difference
-    }
-    return sums
-  }
-  const at = (sums: Float64Array, index: number) => sums[index - from] ?? 0
+  const differences = (lag: number) =>
+    differenceSums(capture, expected, lag, from, to)
+  const at = (sums: Float64Array, index: number) => sumOver(sums, from, index)
   const earlier = differences(lagBefore)
   const later = differences(lagAfter)
   const total = at(later, to)
 
-  let best = Number.POSITIVE_INFINITY
-  let splice = from
-  for (let end = from; end + added <= to; end++) {
-    const cost = at(earlier, end) + total - at(later, end + added)
-    if (cost < best) {
-      best = cost
-      splice = end
-    }
-  }
+  const { end: splice, cost: best } = oneSplice(earlier, later, from, to, added)
   const one = [{ end: splice, start: splice + added, lag: lagAfter }]
 
-  // The lag between stays more than a sample from either, as `near` in
-  // `followSource` counts lags.
+  // The lag between stays more than a sample from either, as `near` counts
+  // lags.
   let bestTwo = Number.POSITIVE_INFINITY
   let two: ReadonlyArray<Join> = one
   for (let firstAdded = 2; firstAdded <= added - 2; firstAdded++) {

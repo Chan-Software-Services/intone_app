@@ -207,6 +207,36 @@ describe('compareWithSource', () => {
     expect(result?.gain).toBeCloseTo(1, 5)
   })
 
+  test("finds a slip in the voice's last fade through the device resampler", () => {
+    // As three takes in 800 on a loaded machine fell (load average 25 to
+    // 39): the voice placed 42.06 ms late, one 10 ms buffer added on the
+    // device 10 ms past the voice's end, where what follows it is 55 dB
+    // down, too quiet for a segment to place. Before the comparison looked
+    // for the fade past the last segment, the slip went unfound and that
+    // segment, with the slip inside it, was fitted at the old lag: 61 dB.
+    const deviceRate = 44100
+    const atDevice = Float32Array.from(
+      sourceAsCaptured(source, rate, deviceRate, 0.0227, 3 * deviceRate),
+    )
+    const at = Math.round((1.91 + 0.0227) * deviceRate)
+    const capture = Float32Array.from(
+      sourceAsCaptured(
+        slipped(atDevice, at, 441),
+        deviceRate,
+        rate,
+        0.01936,
+        captureLength,
+      ),
+    )
+    const result = compareWithSource(capture, rate, source, rate)
+    expect(result?.delaySeconds).toBeCloseTo(0.04206, 6)
+    expect(result?.slips).toHaveLength(1)
+    expect(result?.slips[0]?.bySeconds).toBeCloseTo(0.01, 4)
+    // Where the source resumes, past the silence: 1.91 s into the source.
+    expect(result?.slips[0]?.atSeconds).toBeCloseTo(1.91 + 0.05206, 3)
+    expect(result?.snrDb).toBeGreaterThan(100)
+  })
+
   test('reports 10 ms lost as a slip back', () => {
     const at = Math.round(0.8137 * rate)
     const capture = slipped(delayed(source, 960, captureLength), at, -480)
