@@ -177,6 +177,33 @@ describe('compareWithSource', () => {
     },
   )
 
+  // Six buffers is the largest slip seen in 2,800 takes; a take is kept
+  // with up to 80 ms of silence put in past the voice's own 27 ms
+  // (tests/support/stalls.ts), so the comparison must follow 107 ms too,
+  // in voice and in the voice's own silence, which the slip joins.
+  test.each([
+    [0.06, 0.8],
+    [0.06, 1.14],
+    [0.107, 0.8],
+    [0.107, 1.14],
+  ])(
+    'follows a slip of %s s at %s s into the source, as large as a kept take can hold',
+    (seconds, atSeconds) => {
+      const delay = Math.round(0.0327 * rate)
+      const count = Math.round(seconds * rate)
+      const capture = slipped(
+        delayed(source, delay, captureLength),
+        delay + Math.round(atSeconds * rate),
+        count,
+      )
+      const result = compareWithSource(capture, rate, source, rate)
+      expect(result?.delaySeconds).toBeCloseTo(delay / rate, 7)
+      expect(result?.slips).toHaveLength(1)
+      expect(result?.slips[0]?.bySeconds).toBeCloseTo(count / rate, 6)
+      expect(result?.snrDb).toBeGreaterThan(100)
+    },
+  )
+
   test('tells two close slips from one through the device resampler, at a 16 kHz source', () => {
     // As a loaded machine's run of the 16 kHz format test fell: one 20 ms
     // slip found at 1.3514 s, 19.9 dB, a gain of 0.98999. The device plays

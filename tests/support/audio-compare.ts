@@ -187,15 +187,17 @@ const fractionalDelay = (
 
 // The source is followed through the capture in 20 ms segments, each
 // matched to the source within 15 ms of where the last one sat, or, when
-// none matches there for sure, within 60 ms, so a capture path that drops
+// none matches there for sure, within 110 ms, so a capture path that drops
 // or adds a stretch of samples shows as a slip rather than as noise over
-// everything after it. A loaded machine's fake microphone adds up to four
-// 10 ms buffers at once (docs/fake-microphone.md), so the wider search
-// reaches those 40 ms and two buffers more, for a slip larger than any
-// seen yet.
+// everything after it. A loaded machine's fake microphone adds up to six
+// 10 ms buffers at once (docs/fake-microphone.md), and a take with more
+// silence put in at once than `stallSeconds` (tests/support/stalls.ts)
+// past the voice's own longest silence, 27 ms, is recorded again, so the
+// wider search reaches every slip a take that is kept can hold: 80 ms and
+// 27, and the resampler's few samples either side.
 const segmentSeconds = 0.02
 const followSeconds = 0.015
-const widerFollowSeconds = 0.06
+const widerFollowSeconds = 0.11
 // A segment this far below the capture's peak power is too quiet to place.
 const quietSegment = 1e-4
 // A segment that matches the source no better than this at any lag, about
@@ -358,7 +360,7 @@ const near = (a: number, b: number) => Math.abs(a - b) <= 1
 // The voice's last fade, past the last segment loud enough to place: in
 // the synthetic voices about 40 ms of it, 55 dB and more below the peak,
 // and a slip can put it up to `widerFollowSeconds` later.
-const fadeSeconds = 0.1
+const fadeSeconds = widerFollowSeconds + 0.04
 
 // The power of 16-bit quantisation's error, a 2^-15 step's, per sample.
 const quantisationPower = 2 ** -30 / 12
