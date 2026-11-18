@@ -1,7 +1,7 @@
 // Tells a fake-microphone take the machine stalled from one the device
 // only slipped, and records a stalled take again (docs/fake-microphone.md,
-// "When the machine stalls"). Plain maths on typed arrays, for the
-// fake-microphone tests.
+// "When the machine stalls"), for the fake-microphone tests: plain maths on
+// typed arrays for the check, and an asynchronous loop for the takes.
 //
 // A slip is the device putting one or a few 10 ms buffers of silence into
 // the capture: exact zeros, less the resampler's ringing either side, 8.58

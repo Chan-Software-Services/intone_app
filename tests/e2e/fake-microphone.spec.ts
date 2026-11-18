@@ -29,6 +29,7 @@ import {
 } from '../support/pitch.ts'
 import {
   type Stall,
+  attempts,
   deviceSilenceSeconds,
   recordUnstalled,
 } from '../support/stalls.ts'
@@ -236,7 +237,7 @@ const recordFaithfulTake = (
         source.sampleRate,
       ),
     (stall: Stall) => {
-      const description = `${label}, attempt ${stall.attempt}: ${(stall.silenceSeconds * 1000).toFixed(1)} ms of silence put in at once; recorded again`
+      const description = `${label}, attempt ${stall.attempt}: ${(stall.silenceSeconds * 1000).toFixed(1)} ms of silence put in at once; ${stall.attempt < attempts ? 'recorded again' : 'the last attempt, so the test fails'}`
       testInfo.annotations.push({
         type: 'fake-microphone stall',
         description,
