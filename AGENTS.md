@@ -265,7 +265,7 @@ An asynchronous acquire in a Mount that must stop on unmount uses `Effect.acquir
 
 ## Audio in tests
 
-End-to-end tests drive the real audio path with Chromium's fake microphone playing a known WAV; `docs/fake-microphone.md` says how faithfully it arrives and what a test must allow for (a start 32 ms in, or later by whole 10 ms buffers or a busy main thread, and now and then a slip of one or more 10 ms buffers).
+End-to-end tests drive the real audio path with Chromium's fake microphone playing a known WAV; `docs/fake-microphone.md` says how faithfully it arrives and what a test must allow for (a start 32 ms in, or later by whole 10 ms buffers or a busy main thread, now and then a slip of one or more 10 ms buffers added or lost, and on a machine that stalls the audio path, hundreds of milliseconds of silence with the file's audio lost, which `tests/support/stalls.ts` tells from a slip so its spec records the take again).
 A test that needs the exact samples plays them through the capture worklet with the buffer source in `src/engine/audio/buffer-source.ts` instead.
 
 - `fixtures/synthetic/` holds the synthetic voices and their labels, written by `npm run fixtures:synthetic` from a seed; never edit them by hand, and rerun the script after changing `tests/support/synthetic-voice.ts`, since a test fails on any byte of difference.
