@@ -28,6 +28,12 @@ import {
   pitchError,
 } from '../support/pitch.ts'
 import {
+  type Stall,
+  attempts,
+  deviceSilenceSeconds,
+  recordUnstalled,
+} from '../support/stalls.ts'
+import {
   type SyntheticVoiceLabels,
   type VoiceName,
   synthesiseVoice,
@@ -84,8 +90,8 @@ type Measurement = Comparison &
     firstBatchSeconds: number
     // Where the source's last sample landed, after every slip.
     endSeconds: number
-    // The frames whose span reaches what the slips added: all the slips
-    // can leave with no pitch.
+    // The frames whose span reaches what the slips added or lost: all the
+    // slips can leave with no pitch.
     slipFrames: number
   }>
 
@@ -125,7 +131,7 @@ const measure = (
     batchLengths: [...new Set(capture.batchLengths)],
     firstBatchSeconds: (capture.batchLengths[0] ?? 0) / capture.sampleRate,
     slipFrames: comparison.slips.reduce(
-      (sum, slip) => sum + framesReaching(slip.bySeconds, frameHz),
+      (sum, slip) => sum + framesReaching(Math.abs(slip.bySeconds), frameHz),
       0,
     ),
     endSeconds:
@@ -211,6 +217,35 @@ const recordThroughMicrophone = (
     }),
   )
 
+// A take of `source` through the fake microphone, recorded again when the
+// machine stalled it (tests/support/stalls.ts), each stall told in the
+// test's output and its annotations, so a rising stall rate shows in CI.
+const recordFaithfulTake = (
+  browserType: BrowserType,
+  file: string,
+  source: Source,
+  testInfo: TestInfo,
+  label = 'take',
+): Promise<Capture> =>
+  recordUnstalled(
+    () => recordThroughMicrophone(browserType, file),
+    capture =>
+      deviceSilenceSeconds(
+        samplesOf(capture),
+        capture.sampleRate,
+        source.samples,
+        source.sampleRate,
+      ),
+    (stall: Stall) => {
+      const description = `${label}, attempt ${stall.attempt}: ${(stall.silenceSeconds * 1000).toFixed(1)} ms of silence put in at once; ${stall.attempt < attempts ? 'recorded again' : 'the last attempt, so the test fails'}`
+      testInfo.annotations.push({
+        type: 'fake-microphone stall',
+        description,
+      })
+      console.log(`fake-microphone stall: ${description}`)
+    },
+  )
+
 const report = async (
   testInfo: TestInfo,
   name: string,
@@ -223,11 +258,12 @@ const report = async (
 }
 
 // Each slip adds a whole number of the device's 10 ms buffers: one,
-// mostly, and up to four at once on a loaded machine.
+// mostly, and up to six at once on a loaded machine; one in 2,800 takes
+// lost one instead.
 const expectWholeBuffers = (slips: Comparison['slips']): void => {
   for (const slip of slips) {
     const buffers = Math.round(slip.bySeconds / 0.01)
-    expect(buffers).toBeGreaterThanOrEqual(1)
+    expect(Math.abs(buffers)).toBeGreaterThanOrEqual(1)
     expect(slip.bySeconds).toBeCloseTo(buffers * 0.01, 4)
   }
 }
@@ -235,9 +271,9 @@ const expectWholeBuffers = (slips: Comparison['slips']): void => {
 // What the fake microphone delivers from a 16-bit source, slips aside:
 // the whole voice, at the source's own gain, nothing added beyond 16-bit
 // quantisation and resampling between slips, each slip a whole number of
-// the device's 10 ms buffers added, and a pitch estimate as close to the
-// known curve as the source's own, but for the frames whose span reaches
-// what a slip added.
+// the device's 10 ms buffers added or lost, and a pitch estimate as close
+// to the known curve as the source's own, but for the frames whose span
+// reaches what a slip added or lost.
 const expectFaithful = (measurement: Measurement | null): void => {
   expect(measurement).not.toBeNull()
   if (measurement === null) {
@@ -345,9 +381,11 @@ test.describe('the fake microphone', () => {
       playwright,
     }, testInfo) => {
       const source = fixture(name)
-      const capture = await recordThroughMicrophone(
+      const capture = await recordFaithfulTake(
         playwright.chromium,
         source.file,
+        source,
+        testInfo,
       )
       const measurement = measure(capture, source)
       await report(testInfo, `microphone-${name}.json`, {
@@ -372,7 +410,13 @@ test.describe('the fake microphone', () => {
     for (let run = 0; run < 20; run++) {
       runs.push(
         measure(
-          await recordThroughMicrophone(playwright.chromium, source.file),
+          await recordFaithfulTake(
+            playwright.chromium,
+            source.file,
+            source,
+            testInfo,
+            `run ${run + 1}`,
+          ),
           source,
         ),
       )
@@ -397,6 +441,9 @@ test.describe('the fake microphone', () => {
       pitchMaxCents: spread(unslipped.map(run => run.pitch.maxCents)),
     }
     await report(testInfo, 'microphone-twenty-runs.json', {
+      stalls: testInfo.annotations.filter(
+        annotation => annotation.type === 'fake-microphone stall',
+      ),
       variation,
       unslipped: unslipped.length,
       runs,
@@ -500,14 +547,15 @@ test.describe('the fake microphone', () => {
             channels: Array.from({ length: format.channels }, () => samples),
           }),
         )
-        const source = decodeWav(readFileSync(file))
+        const wav = decodeWav(readFileSync(file))
+        const source: Source = {
+          samples: wav.channels[0] ?? new Float32Array(),
+          sampleRate: format.sampleRate,
+          labels,
+        }
         const measurement = measure(
-          await recordThroughMicrophone(playwright.chromium, file),
-          {
-            samples: source.channels[0] ?? new Float32Array(),
-            sampleRate: format.sampleRate,
-            labels,
-          },
+          await recordFaithfulTake(playwright.chromium, file, source, testInfo),
+          source,
           format.cutBelowHz,
         )
         await report(testInfo, `format-${label}.json`, measurement)

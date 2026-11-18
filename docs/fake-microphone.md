@@ -15,8 +15,9 @@ A test that needs the exact samples drives the capture worklet with the buffer s
 What a test on the fake microphone must allow for:
 
 - the file starts after the worklet's first batch, 32 ms into the capture in most takes, and later by the device's 10 ms buffers and by however long a busy main thread takes to open and connect the microphone: up to 82.7 ms at a load average of 32, 128.7 ms at 48;
-- each slip adds a whole number of 10 ms device buffers of silence, to within 0.05 ms (one in most slips seen, up to four under load), and most takes have none;
-- only the frames whose span reaches what a slip added read no pitch (up to four of the estimate's frames for a 10 or 20 ms slip), and the curve after it is that much late;
+- each slip adds a whole number of 10 ms device buffers of silence, to within 0.05 ms (one in most slips seen, up to six under load), and most takes have none; one slip in 2,800 takes lost a buffer instead;
+- only the frames whose span reaches what a slip added or lost read no pitch (up to four of the estimate's frames for a 10 or 20 ms slip), and the curve after it is that much late or early;
+- a machine that stalls, as one swapping did, can silence the capture for hundreds of milliseconds and lose what the file played meanwhile (see "When the machine stalls");
 - 16-bit quantisation and the resampler, about 89 dB below the voice.
 
 ## How it is measured
@@ -30,11 +31,12 @@ What a test on the fake microphone must allow for:
   It makes the `AudioContext` at 48 kHz and the capture node, waits for the first batch, then opens the microphone with echo cancellation, noise suppression and auto gain off and connects it, as the app should.
 - **The browser.** Playwright's Chromium, one launch per take, with `--use-fake-device-for-media-stream`, `--use-fake-ui-for-media-stream`, `--use-file-for-fake-audio-capture=<wav>%noloop` and `--autoplay-policy=no-user-gesture-required`.
 - **The comparison.** `tests/support/audio-compare.ts` places the source in the capture by its onset, then follows it in 20 ms segments, so a slip shows as a slip rather than as noise over everything after it, then finds each slip's splice to the sample, then finds each stretch's fractional delay and fits one gain over them all.
-  Each segment is searched for within 15 ms of where the last one sat, or within 60 ms when nothing there matches it to 37 dB: a loaded machine's slips add up to four buffers at once, and past one of those a steady vowel can match itself a pitch period off.
+  Each segment is searched for within 15 ms of where the last one sat, or within 110 ms when nothing there matches it to 37 dB: past a slip a steady vowel can match itself a pitch period off, and 110 ms reaches every slip a take the stall check keeps can hold (below).
   The splice is the sample either side of which the capture follows the source at the two lags with the least difference, searched over the segments around the slip, since a segment the splice falls in can still place at the lag on one side.
   Two slips closer together than a segment can place the voice between them look like one slip of both, so the search also tries two splices with the source at a lag between them, and keeps them when they leave less than half the difference one splice leaves: a 16 kHz file's take on a loaded machine came out as one 20 ms slip at 19.9 dB, as two buffers with 11 ms of voice between them do without that search.
   The SNR is the signal against everything else over the stretches between slips, each stretch giving up 2 ms either side of a splice, past the resampler's reach (CI's run 43223000556 measured 50 dB with a splice counted, where the rest of the take was at 89).
   A stretch those 2 ms leave shorter than 1 ms, as they leave the voice between two slips less than 5 ms apart, is too short to place to a fraction of a sample, so it is left out of the fit and sits from the stretch before it by its whole lag.
+  The voice's last fade, past the last segment loud enough to place, is 55 dB and more below the peak, too quiet for a segment to place, so the comparison also tries a splice to each lag of the wider search from the last segment, each lag charged for the capture's own power over the samples it calls the slip's silence, which a real slip leaves at zero, and keeps the fade at a new lag where that leaves less than half the difference (uncharged, a lag 110 ms on sheds that much of a steady noise floor and passes for a slip): before it did, a slip 10 ms past the voice's end went unfound, and three takes in 800 on a loaded machine measured 61 dB.
   `tests/support/pitch.ts` is a plain YIN estimate, never the app's tracker; it reads a steady pitch within a cent, and up to about 16 cents on the voices' fastest glides.
 
 ## Results
@@ -92,7 +94,16 @@ The middle voice twenty times, each in a fresh browser, at a load average of 13 
 One run of the twenty slipped; a second run of the twenty, at the same load, had no slip and stayed within the spreads above.
 The largest pitch error is spread over the runs with no slip only, as each run's own bound is: a slip inside voice puts a frame's pitch tens of cents out (see the slips above), so one slipped run among twenty would fail a spread that every run passes alone.
 Over the whole spec, 6 of its 34 microphone takes slipped in the first run and 3 in the second, and 2 takes in 10 slipped at a load average of 17.
-Every slip seen added 10 ms, but for a few that added 20 to 40 ms under load; none lost any.
+Most slips seen added 10 ms, and a few added 20 to 60 ms under load: over 140 repeats of the twenty runs (2,800 takes) at load averages of 18 to 39, 830 slips added one buffer, 54 two, 9 three, and one each four, five and six.
+One more lost a buffer instead, in the 60 ms of silence between two voiced spans, where both sides fit at 89 dB.
+
+### When the machine stalls
+
+Three takes, on three Playwright workers in the same second, on a shared machine with 12 GB in swap when it was read 40 minutes later, went silent for most of a second: each capture held several runs of exact zeros inside the voice, the longest 268, 308 and 328 ms, against the 60 ms of the largest slip seen, and each lost about 0.6 s of what the file played meanwhile, measuring 4, 1 and -1 dB of signal over the rest.
+That is the machine stopping the audio path, not the device's buffers, and no comparison can measure it.
+So each take the tests hold to the source, every take on the fake microphone but the one with the browser's processing left on, is checked first by `tests/support/stalls.ts`: a take whose longest run of exact zeros inside the voice is more than 80 ms longer than the source's own longest (the synthetic voices hold 21 to 27 ms between their voiced spans) stalled, and is recorded again, up to twice.
+80 ms is two buffers past the largest slip seen and well below the shortest stall seen.
+Each stall is printed in the test's output and kept in its annotations, and the twenty runs' attachment lists them, so a rising stall rate shows on a passing run; a take that stalls three times in a row fails, naming each stall.
 
 ### Which WAV formats work
 

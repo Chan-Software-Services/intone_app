@@ -19,8 +19,8 @@ const nearDeepest = 0.02
 export const frameSpanSeconds = windowSeconds + 1 / minimumHz
 
 // The most frames, `frameHz` apart, whose span can reach the samples a slip
-// of `seconds` added, read at the earlier delay before the slip and at the
-// later one after it: all the slip can leave with no pitch.
+// of `seconds` added or lost, read at the earlier delay before the slip and
+// at the later one after it: all the slip can leave with no pitch.
 export const framesReaching = (seconds: number, frameHz: number): number =>
   Math.floor((frameSpanSeconds + seconds) * frameHz) + 1
 
